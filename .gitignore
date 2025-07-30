@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Environment
+.env
+venv/
+env/
+.venv/
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+database.db
+avito_data.db
+*.sql
+*.dump
+migrations/
+db_backups/
+*.csv
+*.json
+data/
+exports/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Backups
+backup_*.db
+*.backup
+*.bak
+
+# Logs
+*.log
+logs/
+debug.log
+error.log
+parser.log
+
+# Byte-compiled
+*.py[cod]
+
+# Test output
+htmlcov/
+.coverage
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+
+# Pytest
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Config files with sensitive data
+config.ini
+settings.json
+secrets.json
+api_keys.txt
+
+# Downloaded images
+images/
+photos/
+downloads/
