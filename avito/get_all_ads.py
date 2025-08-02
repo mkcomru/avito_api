@@ -134,3 +134,8 @@ def get_all_user_ads(status="active", updated_from=None, category=None):
     print(f"Всего получено {len(all_ads)} объявлений")
     return all_ads
 
+
+if __name__ == "__main__":
+    ads = get_all_user_ads(status="active")
+    print(ads)  # Выводим полученные объявления для проверки
+
