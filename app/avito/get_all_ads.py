@@ -1,9 +1,6 @@
 import requests
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import AVITO_BASE_URL
-from avito.get_access_token import get_access_token
+from app.config import AVITO_BASE_URL
+from .get_access_token import get_access_token
 
 
 def get_user_ads(status="active", per_page=100, page=1, updated_from=None, category=None):

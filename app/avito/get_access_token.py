@@ -1,8 +1,5 @@
 import requests
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_BASE_URL
+from app.config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_BASE_URL
 
 
 def get_access_token():
@@ -31,4 +28,3 @@ def get_access_token():
     except KeyError as e:
         print(f"Ошибка в структуре ответа: {e}")
         return None
-
