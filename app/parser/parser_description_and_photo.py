@@ -5,380 +5,313 @@ import re
 from selenium.webdriver.common.by import By
 from seleniumbase import SB
 from loguru import logger
+import sys
+
+# Добавляем корневую директорию в путь
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from app.config import PROXY_SERVER, PROXY_ENABLED
 
 
-class AvitoItemParser:
+class AvitoPageParser:
     """
-    Адаптированный парсер на основе parser_avito для извлечения описания и фото
-    Оптимизирован для работы без прокси
+    Адаптированный парсер страниц Авито для получения только фото и описания
+    Основан на проверенном parser_cls.py
     """
     
-    def __init__(self, debug_mode=False):
+    def __init__(self, proxy=None, debug_mode=False):
         """
         Инициализация парсера
         
         Args:
+            proxy (str): Прокси в формате username:password@server:port или None для использования из config
             debug_mode (bool): Показывать браузер для отладки
         """
+        # Используем прокси из config если не передан явно
+        if proxy is None and PROXY_ENABLED:
+            self.proxy = PROXY_SERVER
+        else:
+            self.proxy = proxy
+            
         self.debug_mode = debug_mode
         self.user_agents = self._load_user_agents()
         
-        # Селекторы из parser_avito/locator.py
+        # Селекторы точно как в оригинальном parser_cls
         self.selectors = {
-            # Для страницы объявления
-            'description': "[data-marker='item-view/item-description']",
-            'images': "img[itemprop='image']",
-            'image_gallery': ".gallery-img-frame img",
-            'additional_images': ".gallery-extended img",
-            'price': "[itemprop='price']",
-            'title': "[itemprop='name']",
-            'geo': "div[class*='style-item-address']",
-            'seller_name': "[data-marker='seller-info/label']",
-            'date_public': "[data-marker='item-view/item-date']",
-            'total_views': "[data-marker='item-view/total-views']",
-            'seller_link': "[data-marker='seller-link/link']"
+            'description_full': "[data-marker='item-view/item-description']",
+            'images': [
+                "img[itemprop='image']",
+                ".gallery-img-frame img",
+                ".gallery-extended img", 
+                "[data-marker='image-frame/image-wrapper'] img",
+                ".image-frame img",
+                "img[data-marker*='image']"
+            ]
         }
         
-        # Задержки для имитации человеческого поведения (без прокси нужно быть осторожнее)
-        self.delays = {
-            'page_load': (3, 6),
-            'between_actions': (2, 4),
-            'after_error': (10, 15)
-        }
+        logger.info(f"🔧 Парсер инициализирован. Прокси: {'Включен' if self.proxy else 'Отключен'}")
     
     def _load_user_agents(self):
-        """Загружает user agents из parser_avito или использует fallback"""
+        """Загружает user agents как в оригинальном парсере"""
         try:
-            ua_path = os.path.join('parser_avito', 'user_agent_pc.txt')
-            if os.path.exists(ua_path):
-                with open(ua_path, 'r', encoding='utf-8') as f:
-                    agents = [line.strip() for line in f.readlines() if line.strip()]
-                if agents:
-                    logger.debug(f"Загружено {len(agents)} user agents из файла")
-                    return agents
+            # Пытаемся использовать тот же файл что и в parser_cls
+            ua_files = [
+                "user_agent_pc.txt",
+                "app/parser_avito/user_agent_pc.txt",
+                "parser_avito/user_agent_pc.txt"
+            ]
+            
+            for ua_file in ua_files:
+                if os.path.exists(ua_file):
+                    with open(ua_file, 'r', encoding='utf-8') as f:
+                        agents = [line.strip() for line in f.readlines() if line.strip()]
+                    if agents:
+                        logger.debug(f"Загружено {len(agents)} user agents из {ua_file}")
+                        return agents
         except Exception as e:
             logger.debug(f"Не удалось загрузить user agents: {e}")
         
-        # Fallback user agents для стабильной работы
+        # Fallback user agents как в оригинале
         return [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ]
+    
+    def ip_block_handler(self):
+        """Обработка блокировки IP как в оригинальном парсере"""
+        logger.warning("⛔ Обнаружена блокировка IP")
+        if self.proxy:
+            logger.info("🔄 Пауза из-за блокировки, прокси активен")
+            time.sleep(random.uniform(30, 60))
+        else:
+            logger.info("🔄 Блок IP. Прокси нет, увеличенная пауза")
+            time.sleep(random.uniform(300, 350))
     
     def parse_item_page(self, url):
         """
-        Парсит страницу объявления Авито и извлекает описание и изображения
+        Парсит страницу объявления и возвращает только фото и описание
         
         Args:
             url (str): URL страницы объявления
             
         Returns:
-            dict: {'description': str, 'images': list, 'additional_info': dict} или None
+            dict: {'description': str, 'images': list} или None
         """
         if not url:
             logger.error("URL не предоставлен")
             return None
         
-        logger.info(f"Парсим страницу: {url}")
+        logger.info(f"🔍 Парсим страницу: {url}")
         
-        # Увеличиваем задержки для работы без прокси
-        retry_count = 0
         max_retries = 2
         
-        while retry_count < max_retries:
+        for attempt in range(max_retries + 1):
             try:
-                # Настройки браузера адаптированные из parser_avito/parser_cls.py
+                # Настройки браузера точно как в оригинальном parser_cls
                 with SB(uc=True,  # Обход детекции
-                        headed=self.debug_mode,
-                        headless2=not self.debug_mode,
-                        page_load_strategy="eager",  # Быстрая загрузка
-                        block_images=False,  # НЕ блокируем изображения
+                        headed=True if self.debug_mode else False,
+                        headless2=True if not self.debug_mode else False,
+                        page_load_strategy="eager",
+                        block_images=False,  # НЕ блокируем изображения - они нам нужны
                         agent=random.choice(self.user_agents),
-                        sjw=False,  # Отключаем быструю скорость для стабильности без прокси
+                        proxy=self.proxy if self.proxy else None,
+                        sjw=False,  # Стабильность важнее скорости для парсинга фото
                         ) as driver:
                     
                     # Переходим на страницу
                     driver.get(url)
                     
-                    # Проверяем на блокировку как в оригинальном парсере
-                    page_title = driver.get_title()
-                    if "Доступ ограничен" in page_title or "Access denied" in page_title:
-                        logger.error("Доступ ограничен - возможна блокировка IP")
-                        
-                        if retry_count < max_retries - 1:
-                            retry_count += 1
-                            delay = random.uniform(*self.delays['after_error'])
-                            logger.info(f"Попытка {retry_count + 1}/{max_retries} через {delay:.1f} секунд")
-                            time.sleep(delay)
+                    # Проверяем на блокировку точно как в оригинале
+                    if "Доступ ограничен" in driver.get_title():
+                        logger.warning(f"⛔ Доступ ограничен (попытка {attempt + 1})")
+                        if attempt < max_retries:
+                            self.ip_block_handler()
                             continue
                         else:
                             return None
                     
-                    # Ждем загрузки основного контента
+                    # Ждем загрузки контента как в оригинальном парсере
                     try:
-                        driver.wait_for_element(self.selectors['description'], timeout=10)
+                        # Используем тот же селектор что и в parser_cls для проверки загрузки
+                        driver.wait_for_element("[data-marker='item-view/total-views']", timeout=10)
                     except Exception:
-                        logger.warning("Описание не найдено в течение 10 секунд")
+                        # Дополнительная проверка на блокировку
+                        if "Доступ ограничен" in driver.get_title():
+                            logger.warning("⛔ Блокировка обнаружена при ожидании загрузки")
+                            if attempt < max_retries:
+                                self.ip_block_handler()
+                                continue
+                            else:
+                                return None
+                        logger.debug("Не дождался полной загрузки страницы")
                     
-                    # Имитируем человеческое поведение - прокручиваем страницу
+                    # Прокручиваем страницу для загрузки всех изображений
+                    # Имитируем человеческое поведение как в оригинале
                     try:
                         driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
                         time.sleep(random.uniform(1, 2))
                         driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
                         time.sleep(random.uniform(1, 2))
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                        time.sleep(random.uniform(1, 2))
                         driver.execute_script("window.scrollTo(0, 0);")
+                        time.sleep(random.uniform(1, 2))
                     except Exception:
                         pass
                     
                     # Извлекаем данные
-                    result = self._extract_data(driver)
+                    result = self._extract_page_data(driver)
                     
-                    # Задержка для имитации человеческого поведения
-                    time.sleep(random.uniform(*self.delays['between_actions']))
+                    # Задержка перед закрытием браузера как в оригинале
+                    time.sleep(random.uniform(2, 4))
                     
                     return result
                     
             except Exception as e:
-                logger.error(f"Ошибка при парсинге (попытка {retry_count + 1}): {e}")
-                
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    delay = random.uniform(*self.delays['after_error'])
-                    logger.info(f"Повторная попытка через {delay:.1f} секунд")
+                logger.error(f"❌ Ошибка парсинга (попытка {attempt + 1}): {e}")
+                if attempt < max_retries:
+                    delay = random.uniform(10, 15)
+                    logger.info(f"⏳ Пауза {delay:.1f} секунд перед повторной попыткой")
                     time.sleep(delay)
                     continue
                 else:
+                    logger.error("❌ Все попытки исчерпаны")
                     return None
         
         return None
     
-    def _extract_data(self, driver):
-        """Извлекает данные со страницы используя Selenium driver"""
+    def _extract_page_data(self, driver):
+        """Извлекает только описание и изображения"""
         result = {
             'description': None,
-            'images': [],
-            'additional_info': {}
+            'images': []
         }
         
+        # Извлекаем полное описание
         try:
-            # Извлекаем описание
-            try:
-                description_elements = driver.find_elements(self.selectors['description'], by="css selector")
-                if description_elements:
-                    description = description_elements[0].text.strip()
-                    if description:
-                        result['description'] = description
-                        logger.success(f"Найдено описание: {len(description)} символов")
-                    else:
-                        logger.warning("Описание пустое")
+            description_elements = driver.find_elements(self.selectors['description_full'], by="css selector")
+            if description_elements:
+                description = description_elements[0].text.strip()
+                if description:
+                    result['description'] = description
+                    logger.success(f"📄 Описание найдено: {len(description)} символов")
                 else:
-                    logger.warning("Элемент описания не найден")
-            except Exception as e:
-                logger.error(f"Ошибка при извлечении описания: {e}")
-            
-            # Извлекаем изображения
-            images = []
-            try:
-                # Ищем изображения по всем возможным селекторам
-                img_selectors = [
-                    self.selectors['images'],
-                    self.selectors['image_gallery'],
-                    self.selectors['additional_images'],
-                    ".gallery-img-frame img",
-                    ".gallery-extended img",
-                    "[data-marker='image-frame/image-wrapper'] img",
-                    ".image-frame img"
-                ]
-                
-                for selector in img_selectors:
-                    try:
-                        img_elements = driver.find_elements(selector, by="css selector")
-                        for img in img_elements:
-                            # Проверяем разные атрибуты для получения URL изображения
-                            src = (img.get_attribute('src') or 
-                                  img.get_attribute('data-src') or 
-                                  img.get_attribute('data-lazy-src') or
-                                  img.get_attribute('data-original'))
-                            
-                            if src and src.startswith('http') and src not in images:
-                                # Улучшаем качество изображений с avito.st
-                                if 'avito.st' in src:
-                                    # Заменяем размер на максимальный
-                                    src = re.sub(r'_\d+x\d+', '_1280x960', src)
-                                
-                                images.append(src)
-                    except Exception as e:
-                        logger.debug(f"Ошибка с селектором {selector}: {e}")
-                        continue
-                
-                # Убираем дубликаты и ограничиваем количество
-                result['images'] = list(dict.fromkeys(images))[:15]  # Убираем дубли и берем первые 15
-                logger.success(f"Найдено изображений: {len(result['images'])}")
-                
-            except Exception as e:
-                logger.error(f"Ошибка при извлечении изображений: {e}")
-            
-            # Дополнительная информация (опционально, может пригодиться)
-            try:
-                # Цена
-                try:
-                    price_elements = driver.find_elements(self.selectors['price'], by="css selector")
-                    if price_elements:
-                        result['additional_info']['price'] = price_elements[0].get_attribute('content')
-                except Exception:
-                    pass
-                
-                # Название
-                try:
-                    title_elements = driver.find_elements(self.selectors['title'], by="css selector")
-                    if title_elements:
-                        result['additional_info']['title'] = title_elements[0].text.strip()
-                except Exception:
-                    pass
-                
-                # Геолокация
-                try:
-                    geo_elements = driver.find_elements(self.selectors['geo'], by="css selector")
-                    if geo_elements:
-                        result['additional_info']['location'] = geo_elements[0].text.strip()
-                except Exception:
-                    pass
-                
-                # Продавец
-                try:
-                    seller_elements = driver.find_elements(self.selectors['seller_name'], by="css selector")
-                    if seller_elements:
-                        result['additional_info']['seller'] = seller_elements[0].text.strip()
-                except Exception:
-                    pass
-                
-                # Дата публикации
-                try:
-                    date_elements = driver.find_elements(self.selectors['date_public'], by="css selector")
-                    if date_elements:
-                        date_text = date_elements[0].text.strip()
-                        if "· " in date_text:
-                            date_text = date_text.replace("· ", '')
-                        result['additional_info']['date_published'] = date_text
-                except Exception:
-                    pass
-                
-                # Просмотры
-                try:
-                    views_elements = driver.find_elements(self.selectors['total_views'], by="css selector")
-                    if views_elements:
-                        views_text = views_elements[0].text.strip()
-                        # Извлекаем число из строки типа "123 просмотра"
-                        views_match = re.search(r'\d+', views_text)
-                        if views_match:
-                            result['additional_info']['views'] = int(views_match.group())
-                except Exception:
-                    pass
-                
-            except Exception as e:
-                logger.debug(f"Ошибка при извлечении дополнительной информации: {e}")
-        
+                    logger.warning("📄 Описание пустое")
+            else:
+                logger.warning("📄 Элемент описания не найден")
         except Exception as e:
-            logger.error(f"Общая ошибка при извлечении данных: {e}")
+            logger.error(f"❌ Ошибка извлечения описания: {e}")
+        
+        # Извлекаем все изображения
+        images = []
+        try:
+            for selector in self.selectors['images']:
+                try:
+                    img_elements = driver.find_elements(selector, by="css selector")
+                    for img in img_elements:
+                        # Проверяем разные атрибуты изображений
+                        src = (img.get_attribute('src') or 
+                              img.get_attribute('data-src') or 
+                              img.get_attribute('data-lazy-src') or
+                              img.get_attribute('data-original'))
+                        
+                        if src and src.startswith('http') and src not in images:
+                            # Улучшаем качество изображений avito.st как в оригинале
+                            if 'avito.st' in src:
+                                src = re.sub(r'_\d+x\d+', '_1280x960', src)
+                            images.append(src)
+                except Exception as e:
+                    logger.debug(f"Ошибка с селектором {selector}: {e}")
+                    continue
+            
+            # Убираем дубликаты и ограничиваем количество
+            result['images'] = list(dict.fromkeys(images))[:15]  # Максимум 15 фото
+            logger.success(f"🖼️ Найдено изображений: {len(result['images'])}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка извлечения изображений: {e}")
         
         return result
 
 
-# Глобальный экземпляр парсера (singleton)
+# Единственный экземпляр парсера для всего приложения (как в оригинале)
 _parser_instance = None
 
-def get_parser_instance(debug_mode=False):
-    """Получить экземпляр парсера (singleton pattern)"""
+def get_parser():
+    """Получить единственный экземпляр парсера"""
     global _parser_instance
     if _parser_instance is None:
-        _parser_instance = AvitoItemParser(debug_mode=debug_mode)
+        _parser_instance = AvitoPageParser(debug_mode=False)
     return _parser_instance
 
-def parse_avito_item_page(url, debug_mode=False):
+
+def parse_avito_photos_and_description(url, proxy=None, debug=False):
     """
-    Основная функция для парсинга страницы объявления Авито
+    Простая функция для парсинга фото и описания
     
     Args:
         url (str): URL страницы объявления
-        debug_mode (bool): Режим отладки
+        proxy (str): Прокси в формате username:password@server:port
+        debug (bool): Показывать браузер
         
     Returns:
-        dict: {'description': str, 'images': list, 'additional_info': dict} или None
-    """
-    parser = get_parser_instance(debug_mode=debug_mode)
-    return parser.parse_item_page(url)
-
-
-# Функция для интеграции в вашу систему
-def get_listing_details(listing_url, debug=False):
-    """
-    Функция для интеграции в вашу систему уведомлений
-    
-    Args:
-        listing_url (str): URL объявления
-        debug (bool): Режим отладки
-        
-    Returns:
-        dict: Данные объявления или None при ошибке
+        dict: {'description': str, 'images': list} или None
     """
     try:
-        logger.info(f"Получаем детали объявления: {listing_url}")
-        
-        # Парсим страницу
-        parsed_data = parse_avito_item_page(listing_url, debug_mode=debug)
-        
-        if parsed_data:
-            logger.success("Данные успешно получены")
-            return {
-                'description': parsed_data.get('description'),
-                'images': parsed_data.get('images', []),
-                'price': parsed_data.get('additional_info', {}).get('price'),
-                'title': parsed_data.get('additional_info', {}).get('title'),
-                'location': parsed_data.get('additional_info', {}).get('location'),
-                'seller': parsed_data.get('additional_info', {}).get('seller'),
-                'date_published': parsed_data.get('additional_info', {}).get('date_published'),
-                'views': parsed_data.get('additional_info', {}).get('views')
-            }
-        else:
-            logger.error("Не удалось получить данные объявления")
-            return None
-            
+        parser = AvitoPageParser(proxy=proxy, debug_mode=debug)
+        return parser.parse_item_page(url)
     except Exception as e:
-        logger.error(f"Ошибка при получении деталей объявления: {e}")
+        logger.error(f"❌ Ошибка парсинга: {e}")
         return None
 
 
-# Функция для тестирования
 def test_parser():
-    """Тестирует парсер"""
-    logger.info("🧪 Тестируем адаптированный парсер без прокси...")
+    """Тестирует парсер с вашими настройками"""
+    logger.info("🧪 Тестируем адаптированный парсер...")
     
-    # Тестовая ссылка (замените на реальную)
-    test_url = "https://www.avito.ru/moskva/odezhda_obuv_aksessuary/sportivnye_solntsezaschitnye_ochki_bliz_7403930411"
+    # Ваш прокси из конфига
+    proxy = PROXY_SERVER if PROXY_ENABLED else None
     
-    result = get_listing_details(test_url, debug=True)
+    # Тестовые URL
+    test_urls = [
+        "https://www.avito.ru/amurskaya_oblast_blagoveschensk/predlozheniya_uslug/fotozona_v_arendu_na_gender_pati_7549350435",
+        "https://www.avito.ru/moskva/kvartiry/1-k._kvartira_32_m_35_et._2011149284"
+    ]
     
-    if result:
-        logger.success("✅ Парсинг выполнен успешно!")
-        logger.info(f"📄 Описание: {'Найдено' if result['description'] else 'Не найдено'}")
-        if result['description']:
-            logger.info(f"   Длина: {len(result['description'])} символов")
-            logger.info(f"   Превью: {result['description'][:100]}...")
+    for i, test_url in enumerate(test_urls, 1):
+        logger.info(f"\n📄 Тест {i}: {test_url}")
+        logger.info(f"🔧 Используемый прокси: {proxy}")
         
-        logger.info(f"🖼️ Изображений: {len(result['images'])}")
-        for i, img_url in enumerate(result['images'][:3], 1):
-            logger.info(f"   {i}. {img_url}")
+        # Создаем парсер
+        parser = AvitoPageParser(proxy=proxy, debug_mode=True)  # True для просмотра браузера
+        
+        # Парсим
+        result = parser.parse_item_page(test_url)
+        
+        if result:
+            logger.success("✅ Парсинг успешен!")
             
-        if result.get('price'):
-            logger.info(f"💰 Цена: {result['price']}")
-        if result.get('location'):
-            logger.info(f"📍 Местоположение: {result['location']}")
-        if result.get('seller'):
-            logger.info(f"👤 Продавец: {result['seller']}")
-    else:
-        logger.error("❌ Ошибка парсинга")
+            if result['description']:
+                logger.info(f"📄 Описание ({len(result['description'])} символов):")
+                logger.info(f"   {result['description'][:200]}...")
+            else:
+                logger.warning("📄 Описание не найдено")
+            
+            if result['images']:
+                logger.info(f"🖼️ Найдено {len(result['images'])} изображений:")
+                for j, img_url in enumerate(result['images'][:3], 1):
+                    logger.info(f"   {j}. {img_url}")
+            else:
+                logger.warning("🖼️ Изображения не найдены")
+                
+        else:
+            logger.error("❌ Парсинг неудачен")
+        
+        # Пауза между тестами
+        if i < len(test_urls):
+            logger.info("⏳ Пауза 10 секунд между тестами...")
+            time.sleep(10)
 
 
 if __name__ == "__main__":
